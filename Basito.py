@@ -44,21 +44,22 @@ def obtener_stock(articulo):
     conn.close()
     return stock
 
-def Insertar_producto(producto, costo):
+def Insertar_producto(producto, costo, chat_id):
     conn = sqlite3.connect("Reposteria.db")
     cursor = conn.cursor()
-    cursor.execute(f"INSERT INTO productos (nombre, precio, stock)VALUES ('{producto}',{costo}, 0)")
+    cursor.execute(f"INSERT INTO productos (nombre, precio, stock, chat_id)VALUES ('{producto}',{costo}, 0,{chat_id})")
     stock = conn.commit()
     conn.close()
     return stock
 
-def Eliminar_producto(producto):
+def Eliminar_pedido(producto, chat_id):
     conn = sqlite3.connect("Reposteria.db")
     cursor = conn.cursor()
-    cursor.execute(f"DELETE from productos where nombre='{producto}'")
-    stock = conn.commit()
+    cursor.execute("DELETE FROM Pedidos WHERE producto=? AND chat_id=? LIMIT 1", (producto, str(chat_id)))
+    eliminado = cursor.rowcount > 0
+    conn.commit()
     conn.close()
-    return stock
+    return eliminado
 
 def Modificar_stock(producto, stock):
     conn = sqlite3.connect("Reposteria.db")
@@ -69,22 +70,55 @@ def Modificar_stock(producto, stock):
     return stock
 
 
-def Guardar_producto_cliente(producto,NomCliente):
+def Guardar_producto_cliente(producto, NomCliente, chat_id):
     conn = sqlite3.connect("Reposteria.db")
     cursor = conn.cursor()
-    cursor.execute(f"INSERT INTO Pedidos (NomCliente, producto,precio,idpedido,precio, stock)VALUES ('{NomCliente}','{producto}',0,0,0,0)")
+
+    # Insertar en pedido usando datos de productos
+    cursor.execute("""
+        INSERT INTO Pedidos (NomCliente, Producto, precio, stock, chat_id)
+        SELECT ?, p.nombre, p.precio, p.stock, ?
+        FROM productos p
+        WHERE p.nombre = ?
+    """, (NomCliente, str(chat_id), producto))
+    guardar=conn.commit()
+    conn.close()
+    return guardar
+
+def Eliminar_pedido(producto, chat_id):
+    conn = sqlite3.connect("Reposteria.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM Pedidos WHERE LOWER(Producto)=? AND chat_id=?", (producto.lower(), str(chat_id))) 
+    eliminado = cursor.rowcount > 0  # True si se borró al menos una fila
+    conn.commit()
+    conn.close()
+    return eliminado
+    
+
+def Eliminar_producto(producto):
+    conn = sqlite3.connect("Reposteria.db")
+    cursor = conn.cursor()
+    cursor.execute(f"DELETE from productos where nombre='{producto}'")
     stock = conn.commit()
     conn.close()
     return stock
 
-def Eliminar_pedido(producto):
+def calcular_total_carrito(chat_id):
     conn = sqlite3.connect("Reposteria.db")
     cursor = conn.cursor()
-    cursor.execute(f"DELETE from Pedidos where producto='{producto}'")
-    stock = conn.commit()
-    conn.close()
-    return stock
 
+    # Traer todos los productos y precios del usuario
+    cursor.execute("SELECT producto, precio FROM Pedidos WHERE chat_id=?", (str(chat_id),))
+    productos = cursor.fetchall()
+    conn.close()
+
+    if not productos:
+        return None, 0
+
+    # Armamos la lista de productos y sumamos el total
+    lista = "\n".join([f"• {p[0]} - ${p[1]:.2f}" for p in productos])
+    total = sum([p[1] for p in productos])
+    return lista, total
 
 def get_updates(offset=None, timeout=30):
     params = {"timeout": timeout, "offset": offset}
@@ -141,10 +175,11 @@ Elije una opción:\n
                                                                 
 Menu Comercio:
 ---------------------------------------------------------------
-Elije una opción:     
-                5. Cargar nuevo producto al catalogo\n
-                6.Eliminar producto\n  
-                7.Actualizar stock\n
+Elije una opción: 
+                6. Consultar productos y precios actualizados\n   
+                7. Cargar nuevo producto al catalogo\n
+                8.Eliminar producto\n  
+                9.Actualizar stock\n
                                 """)
                     usuarios_saludados.add(chat_id)
 #---------------------------------------------------------------------------------------------------------
@@ -184,15 +219,15 @@ Elije una opción:
                         datos_temporales[chat_id] = {}
                         datos_temporales[chat_id]["producto"] = producto
 
-                    if "nombre" in datos_temporales[chat_id]:
-                        NomCliente = datos_temporales[chat_id]["nombre"]
-                        Guardar_producto_cliente(producto, NomCliente)
-                        send_message(chat_id, f"Gracias {NomCliente} 💖. Añadimos '{producto}' al carrito.")
-                        send_message(chat_id, "¿Deseás agregar otro producto? (Sí / No)")
-                        estado_usuario[chat_id] = "confirmar_otro_pedido"
-                    else:
-                        send_message(chat_id, "🍓 ¡Perfecto! ¿Cuál es tu nombre?")
-                        estado_usuario[chat_id] = "esperando_nombre"
+                        if "nombre" in datos_temporales[chat_id]:
+                            NomCliente = datos_temporales[chat_id]["nombre"]
+                            Guardar_producto_cliente(producto, NomCliente, chat_id)
+                            send_message(chat_id, f"Gracias {NomCliente} 💖. Añadimos '{producto}' al carrito.")
+                            send_message(chat_id, "¿Deseás agregar otro producto? (Sí / No)")
+                            estado_usuario[chat_id] = "confirmar_otro_pedido"
+                        else:
+                            send_message(chat_id, "🍓 ¡Perfecto! ¿Cuál es tu nombre?")
+                            estado_usuario[chat_id] = "esperando_nombre"
 
                 elif estado == "esperando_nombre":
                     NomCliente = text
@@ -200,11 +235,11 @@ Elije una opción:
 
                 # Guardamos el nombre para las próximas veces
                     datos_temporales[chat_id]["nombre"] = NomCliente
-
-                    Guardar_producto_cliente(producto, NomCliente)
+                    Guardar_producto_cliente(producto, NomCliente, chat_id)
                     send_message(chat_id, f"Gracias {NomCliente} 💖. Añadimos '{producto}' al carrito.")
                     send_message(chat_id, "¿Deseás agregar otro producto? (Sí / No)")
                     estado_usuario[chat_id] = "confirmar_otro_pedido"
+
 
                 elif estado == "confirmar_otro_pedido":
                     if text.lower() in ["sí", "si"]:
@@ -220,19 +255,39 @@ Elije una opción:
 
 #-------------------------------------------------------------------------------
                 elif text.lower() == "4":
-                        send_message(chat_id, "Que producto desea eliminar")
-                        estado_usuario[chat_id] = "esperando_pedido_eliminado"
+                    send_message(chat_id, "🗑️ ¿Qué producto deseas eliminar del carrito?")
+                    estado_usuario[chat_id] = "esperando_pedido_eliminado"
                 elif estado == "esperando_pedido_eliminado":
-                        datos_temporales[chat_id] = {"pedidoAborrar": text}
-                        producto=text
-                        Resultado=Eliminar_pedido(producto)
-                        send_message(chat_id, f"El producto {producto} fue eliminado del sistema")
+                    producto = text
+                    if Eliminar_pedido(producto, chat_id):
+                        send_message(chat_id, f"✅ El producto '{producto}' fue eliminado de tu carrito.")
+                    else:
+                        send_message(chat_id, f"⚠️ No encontramos '{producto}' en tu carrito.")
+                    
+#-----------------------------------------------------------------------------------------------------------
+                elif text == "5":
+                    lista, total = calcular_total_carrito(chat_id)
+                    if total == 0:
+                        send_message(chat_id, "🍃 Tu carrito está vacío.")
+                    else:
+                        mensaje = f"🧺 Productos en tu carrito:\n{lista}\n\n🧾 Total: ${total:.2f}"
+                        send_message(chat_id, mensaje)
 
+#---------------------------------------------------------------------------------------------------------------
+                elif text == "6":
+                    productos = obtener_productos()
+                    if productos:
+                        mensaje = "productos actualizados:\n"
+                        
+                        compra = obtener_productos()
+                        for producto in compra:
+                            mensaje=mensaje+(f"{producto[0]} precio: {producto[1]}\n") 
+                    else:
+                        mensaje = "No hay productos cargados en el catálogo aún 🍃"
+                    send_message(chat_id, mensaje)
 
-
-
-#-----------------------------------------------------------------------------------------------------------6
-                elif text.lower() == "5":
+#-------------------------------------------------------------------------------------------------------------------
+                elif text.lower() == "7":
                     send_message(chat_id, "🧁 Ingrese el nuevo producto a cargar")
                     estado_usuario[chat_id] = "esperando_producto_vendedor"
                 elif estado == "esperando_producto_vendedor":
@@ -245,10 +300,10 @@ Elije una opción:
                 elif estado == "esperando_producto_precio":
                     producto = datos_temporales[chat_id]["productoCargar"]
                     precioCarga = text
-                    resultado=Insertar_producto(producto,precioCarga)
+                    resultado=Insertar_producto(producto,precioCarga, chat_id)
                     send_message(chat_id, f"El producto {producto} con precio  {precioCarga} fue agregado al sistema")
  #-------------------------------------------------------------------------------------------------------------   
-                elif text.lower() == "6":
+                elif text.lower() == "8":
                     send_message(chat_id, "Que producto desea eliminar")
                     estado_usuario[chat_id] = "esperando_producto_eliminado"
                 elif estado == "esperando_producto_eliminado":
@@ -258,7 +313,7 @@ Elije una opción:
                     send_message(chat_id, f"El producto {producto} fue eliminado del sistema")
              
 #--------------------------------------------------------------------------------------------------------------------
-                elif text.lower() == "7":
+                elif text.lower() == "9":
                     send_message(chat_id, "Ingrese el producto a modificar")
                     estado_usuario[chat_id] = "esperando_producto_Amodificar"
                 elif estado == "esperando_producto_Amodificar":
